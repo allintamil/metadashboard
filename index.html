@@ -309,8 +309,55 @@
   const fmtR = n => n ? '₹'+parseFloat(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
   const fmtPct = n => n ? parseFloat(n).toFixed(2)+'%' : '—';
   const badge = s => { const m={ACTIVE:'active',PAUSED:'paused',ARCHIVED:'archived',DELETED:'deleted'}; return `<span class="badge badge-${m[s]||'paused'}">${s}</span>`; };
-  const getLeads = ins => { if(!ins||!ins.actions) return 0; const a=ins.actions.find(x=>['lead','onsite_conversion.lead_grouped','offsite_conversion.fb_pixel_lead'].includes(x.action_type)); return a?parseInt(a.value):0; };
-  const getCPL = ins => { if(!ins||!ins.cost_per_action_type) return 0; const a=ins.cost_per_action_type.find(x=>['lead','onsite_conversion.lead_grouped','offsite_conversion.fb_pixel_lead'].includes(x.action_type)); return a?parseFloat(a.value):0; };
+  const OBJECTIVE_MAP = {
+    'OUTCOME_LEADS':{ types:['lead','onsite_conversion.lead_grouped','offsite_conversion.fb_pixel_lead'], label:'Leads' },
+    'LEAD_GENERATION':{ types:['lead','onsite_conversion.lead_grouped'], label:'Leads' },
+    'OUTCOME_CALLS':{ types:['click_to_call_call_confirm','call_confirm_grouped','click_to_call_native_call_placed'], label:'Calls' },
+    'OUTCOME_TRAFFIC':{ types:['link_click'], label:'Clicks' },
+    'LINK_CLICKS':{ types:['link_click'], label:'Clicks' },
+    'OUTCOME_SALES':{ types:['offsite_conversion.fb_pixel_purchase','purchase'], label:'Purchases' },
+    'CONVERSIONS':{ types:['offsite_conversion.fb_pixel_purchase','offsite_conversion.fb_pixel_lead','lead'], label:'Conversions' },
+    'OUTCOME_ENGAGEMENT':{ types:['post_engagement','page_engagement'], label:'Engagements' },
+    'POST_ENGAGEMENT':{ types:['post_engagement'], label:'Engagements' },
+    'APP_INSTALLS':{ types:['app_install','mobile_app_install'], label:'Installs' },
+    'OUTCOME_APP_PROMOTION':{ types:['app_install','mobile_app_install'], label:'Installs' },
+    'BRAND_AWARENESS':{ types:['reach'], label:'Reach' },
+    'VIDEO_VIEWS':{ types:['video_view'], label:'Views' },
+    'OUTCOME_AWARENESS':{ types:['reach'], label:'Reach' },
+  };
+  function getResult(ins, objective) {
+    if (!ins || !ins.actions) return { value:0, label:'Results' };
+    const obj = (objective||'').toUpperCase();
+    const map = OBJECTIVE_MAP[obj];
+    if (map) {
+      for (const t of map.types) {
+        const a = ins.actions.find(x => x.action_type === t);
+        if (a) return { value:parseInt(a.value), label:map.label };
+      }
+      return { value:0, label:map.label };
+    }
+    const hasCall = ins.actions.find(x => x.action_type.includes('call_confirm') || x.action_type.includes('click_to_call'));
+    if (hasCall) return { value:parseInt(hasCall.value), label:'Calls' };
+    const hasLead = ins.actions.find(x => x.action_type === 'lead' || x.action_type.includes('lead_grouped'));
+    if (hasLead) return { value:parseInt(hasLead.value), label:'Leads' };
+    const hasClick = ins.actions.find(x => x.action_type === 'link_click');
+    if (hasClick) return { value:parseInt(hasClick.value), label:'Clicks' };
+    return { value:0, label:'Results' };
+  }
+  function getResultCost(ins, objective) {
+    if (!ins || !ins.cost_per_action_type) return 0;
+    const obj = (objective||'').toUpperCase();
+    const map = OBJECTIVE_MAP[obj];
+    if (map) {
+      for (const t of map.types) {
+        const a = ins.cost_per_action_type.find(x => x.action_type === t);
+        if (a) return parseFloat(a.value);
+      }
+    }
+    return ins.cost_per_action_type[0] ? parseFloat(ins.cost_per_action_type[0].value) : 0;
+  }
+  const getLeads = ins => getResult(ins, 'OUTCOME_LEADS').value;
+  const getCPL = ins => getResultCost(ins, 'OUTCOME_LEADS');
 
   // ── API ──
   async function apiFetch(endpoint, params) {
@@ -338,17 +385,17 @@
       // Account insights
       const r1 = await apiFetch(`${acc}/insights`, { fields, date_preset: range });
       const ins = r1.data?.[0] || {};
-      const l = getLeads(ins), c = getCPL(ins);
       const sp = parseFloat(ins.spend||0);
-      const totalR = l || (ins.actions ? ins.actions.reduce((s,a)=>s+parseInt(a.value||0),0):0);
-      const cplF = c || (totalR && sp ? sp/totalR : 0);
+      // Smart detect: try leads first, then calls, then clicks
+      const accResult = getResult(ins, null);
+      const accCost = accResult.value && sp ? sp/accResult.value : 0;
 
       setKPI('k-spend', fmtR(ins.spend));
       setKPI('k-impr', fmt(ins.impressions));
       setKPI('k-clicks', fmt(ins.clicks));
       setKPI('k-ctr', fmtPct(ins.ctr));
-      setKPI('k-leads', fmt(totalR));
-      setKPI('k-cpl', cplF ? fmtR(cplF) : '—');
+      setKPI('k-leads', accResult.value ? fmt(accResult.value)+' '+accResult.label : '—');
+      setKPI('k-cpl', accCost ? fmtR(accCost) : '—');
       setKPI('k-reach', fmt(ins.reach));
       setKPI('k-freq', ins.frequency ? parseFloat(ins.frequency).toFixed(2) : '—');
 
@@ -398,6 +445,8 @@
       const i = c.insights?.data?.[0]||{};
       const sp = parseFloat(i.spend||0);
       const pct = Math.round((sp/maxSp)*100);
+      const res = getResult(i, c.objective);
+      const cost = getResultCost(i, c.objective);
       html += `<tr>
         <td class="name-cell">${c.name}<small>${c.id}</small><div class="mini-bar"><div class="mini-bar-fill" style="width:${pct}%"></div></div></td>
         <td>${badge(c.status)}</td>
@@ -406,8 +455,8 @@
         <td class="mono">${fmt(i.impressions)}</td>
         <td class="mono">${fmt(i.clicks)}</td>
         <td class="mono">${fmtPct(i.ctr)}</td>
-        <td class="mono" style="color:var(--green);font-weight:600">${getLeads(i)||'—'}</td>
-        <td class="mono">${getCPL(i)?fmtR(getCPL(i)):'—'}</td>
+        <td class="mono" style="color:var(--green);font-weight:600">${res.value||'—'} <span style="font-size:10px;color:var(--text3);font-weight:400">${res.label}</span></td>
+        <td class="mono">${cost?fmtR(cost):'—'}</td>
       </tr>`;
     }
     document.getElementById('camp-wrap').innerHTML = html + '</tbody></table>';
