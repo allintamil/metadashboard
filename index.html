@@ -194,8 +194,8 @@
     <div class="kpi"><div class="kpi-icon">👁</div><div class="kpi-label">Impressions</div><div class="kpi-val" id="k-impr">—</div><div class="kpi-sub">Total views</div></div>
     <div class="kpi"><div class="kpi-icon">🖱</div><div class="kpi-label">Clicks</div><div class="kpi-val" id="k-clicks">—</div><div class="kpi-sub">Link clicks</div></div>
     <div class="kpi"><div class="kpi-icon">📊</div><div class="kpi-label">CTR</div><div class="kpi-val" id="k-ctr">—</div><div class="kpi-sub">Click-through rate</div></div>
-    <div class="kpi"><div class="kpi-icon">🎯</div><div class="kpi-label">Leads</div><div class="kpi-val" id="k-leads">—</div><div class="kpi-sub">Total results</div></div>
-    <div class="kpi"><div class="kpi-icon">💡</div><div class="kpi-label">Cost/Lead</div><div class="kpi-val" id="k-cpl">—</div><div class="kpi-sub">Avg CPL</div></div>
+    <div class="kpi"><div class="kpi-icon">🎯</div><div class="kpi-label">Results</div><div class="kpi-val" id="k-leads">—</div><div class="kpi-sub" id="k-leads-sub">Auto-detected</div></div>
+    <div class="kpi"><div class="kpi-icon">💡</div><div class="kpi-label">Cost/Result</div><div class="kpi-val" id="k-cpl">—</div><div class="kpi-sub">Per result</div></div>
     <div class="kpi"><div class="kpi-icon">🌐</div><div class="kpi-label">Reach</div><div class="kpi-val" id="k-reach">—</div><div class="kpi-sub">Unique users</div></div>
     <div class="kpi"><div class="kpi-icon">🔁</div><div class="kpi-label">Frequency</div><div class="kpi-val" id="k-freq">—</div><div class="kpi-sub">Avg per person</div></div>
   </div>
@@ -410,7 +410,7 @@
       // Ad Sets
       showLoader('adset-wrap');
       const r3 = await apiFetch(`${acc}/adsets`, {
-        fields: `id,name,status,daily_budget,insights.date_preset(${range}){spend,impressions,clicks,ctr,reach,actions,cost_per_action_type}`,
+        fields: `id,name,status,objective,daily_budget,campaign{objective},insights.date_preset(${range}){spend,impressions,clicks,ctr,reach,actions,cost_per_action_type}`,
         limit: 100
       });
       renderAdsets(r3.data || []);
@@ -439,7 +439,7 @@
     document.getElementById('tc-camp').textContent = data.length;
     if (!data.length) { document.getElementById('camp-wrap').innerHTML = emptyHTML(); return; }
     const maxSp = Math.max(...data.map(c=>parseFloat(c.insights?.data?.[0]?.spend||0)),1);
-    let html = tableHead(['Campaign','Status','Objective','Spend','Impressions','Clicks','CTR','Leads','CPL']);
+    let html = tableHead(['Campaign','Status','Objective','Spend','Impressions','Clicks','CTR','Results','Cost/Result']);
     html += `<tbody id="camp-tbody">`;
     for (const c of data) {
       const i = c.insights?.data?.[0]||{};
@@ -465,11 +465,13 @@
   function renderAdsets(data) {
     document.getElementById('tc-adset').textContent = data.length;
     if (!data.length) { document.getElementById('adset-wrap').innerHTML = emptyHTML(); return; }
-    let html = tableHead(['Ad Set','Status','Daily Budget','Spend','Reach','Clicks','CTR','Leads','CPL']);
+    let html = tableHead(['Ad Set','Status','Daily Budget','Spend','Reach','Clicks','CTR','Results','Cost/Result']);
     html += `<tbody id="adset-tbody">`;
     for (const a of data) {
       const i = a.insights?.data?.[0]||{};
       const budget = a.daily_budget ? fmtR(parseFloat(a.daily_budget)/100) : '—';
+      const ares = getResult(i, a.objective||'');
+      const acost = getResultCost(i, a.objective||'');
       html += `<tr>
         <td class="name-cell">${a.name}<small>${a.id}</small></td>
         <td>${badge(a.status)}</td>
@@ -478,8 +480,8 @@
         <td class="mono">${fmt(i.reach)}</td>
         <td class="mono">${fmt(i.clicks)}</td>
         <td class="mono">${fmtPct(i.ctr)}</td>
-        <td class="mono" style="color:var(--green);font-weight:600">${getLeads(i)||'—'}</td>
-        <td class="mono">${getCPL(i)?fmtR(getCPL(i)):'—'}</td>
+        <td class="mono" style="color:var(--green);font-weight:600">${ares.value||'—'} <span style="font-size:10px;color:var(--text3);font-weight:400">${ares.label}</span></td>
+        <td class="mono">${acost?fmtR(acost):'—'}</td>
       </tr>`;
     }
     document.getElementById('adset-wrap').innerHTML = html + '</tbody></table>';
@@ -488,10 +490,12 @@
   function renderAds(data) {
     document.getElementById('tc-ads').textContent = data.length;
     if (!data.length) { document.getElementById('ads-wrap').innerHTML = emptyHTML(); return; }
-    let html = tableHead(['Ad Name','Status','Spend','Impressions','Clicks','CTR','Leads','CPL']);
+    let html = tableHead(['Ad Name','Status','Spend','Impressions','Clicks','CTR','Results','Cost/Result']);
     html += `<tbody id="ads-tbody">`;
     for (const a of data) {
       const i = a.insights?.data?.[0]||{};
+      const dres = getResult(i, '');
+      const dcost = dres.value && parseFloat(i.spend||0) ? parseFloat(i.spend)/dres.value : 0;
       html += `<tr>
         <td class="name-cell">${a.name}<small>${a.id}</small></td>
         <td>${badge(a.status)}</td>
@@ -499,8 +503,8 @@
         <td class="mono">${fmt(i.impressions)}</td>
         <td class="mono">${fmt(i.clicks)}</td>
         <td class="mono">${fmtPct(i.ctr)}</td>
-        <td class="mono" style="color:var(--green);font-weight:600">${getLeads(i)||'—'}</td>
-        <td class="mono">${getCPL(i)?fmtR(getCPL(i)):'—'}</td>
+        <td class="mono" style="color:var(--green);font-weight:600">${dres.value||'—'} <span style="font-size:10px;color:var(--text3);font-weight:400">${dres.label}</span></td>
+        <td class="mono">${dcost?fmtR(dcost):'—'}</td>
       </tr>`;
     }
     document.getElementById('ads-wrap').innerHTML = html + '</tbody></table>';
